@@ -11,7 +11,13 @@ import QRCode from 'qrcode';
 import { schema } from '@jobbank/db';
 import { and, eq } from 'drizzle-orm';
 import { getApplicantForStaff } from './staff';
-import { assertBranchAccess, assertCityAccess, assertPermission, type Actor } from '@/domains/shared/scope';
+import { currentDocuments } from './repository';
+import {
+  assertBranchAccess,
+  assertCityAccess,
+  assertPermission,
+  type Actor,
+} from '@/domains/shared/scope';
 import { runCommand, type RequestContext } from '@/domains/shared/audit';
 import { NotFoundError } from '@/domains/shared/errors';
 import { masterDataLabels } from '@/domains/settings';
@@ -176,6 +182,15 @@ export async function createApplicantRegistrationForm(
     masterDataLabels(['EDUCATION_LEVEL', 'SKILL', 'LANGUAGE', 'CITY', 'AREA', 'JOB_CATEGORY']),
     ensureApplicantVerificationToken(ctx, applicantId, false, 'city'),
   ]);
+  // The applicant's current passport-size photo, if one was captured and
+  // confirmed: the newest current PHOTO document that is usable (uploaded
+  // or accepted — rejected and virus-flagged photos never print). Only the
+  // document id travels in the form payload; the client fetches a fresh
+  // short-lived view link when printing.
+  const photoDocuments = await currentDocuments(db, applicantId);
+  const photo = photoDocuments.find(
+    (doc) => doc.typeCode === 'PHOTO' && doc.status !== 'REJECTED' && doc.scanResult !== 'infected',
+  );
   const label = (type: keyof typeof labels, code: string | null) =>
     code ? (labels[type]?.[code] ?? 'Not available') : null;
   const verificationUrl = new URL(`/verify/applicant/${token}`, env.NEXT_PUBLIC_APP_URL).toString();
@@ -245,6 +260,7 @@ export async function createApplicantRegistrationForm(
       : null,
     verificationQrDataUrl,
     canRegenerate: profile.can.manage,
+    photoDocumentId: photo?.id ?? null,
   };
 }
 
