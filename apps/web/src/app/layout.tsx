@@ -33,7 +33,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     // suppressHydrationWarning: the theme script sets data-theme before React hydrates.
     <html lang="en" className={inter.variable} suppressHydrationWarning>
       <head>
-        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeScript }} />
+        {/* Browsers hide nonce attributes from DOM reads, so hydration sees an empty value. */}
+        <script
+          nonce={nonce}
+          suppressHydrationWarning
+          dangerouslySetInnerHTML={{ __html: themeScript }}
+        />
       </head>
       <body className="min-h-dvh">
         <ThemeProvider>

@@ -37,6 +37,7 @@ const form: RegistrationFormData = {
   preferences: null,
   verificationQrDataUrl: 'data:image/png;base64,dGVzdA==',
   canRegenerate: false,
+  photoDocumentId: null,
 };
 
 describe('RegistrationPrintClient', () => {
@@ -68,5 +69,48 @@ describe('RegistrationPrintClient', () => {
     Object.defineProperty(window, 'print', { configurable: true, value: print });
     fireEvent.click(screen.getByRole('button', { name: 'Print Registration Form' }));
     expect(print).toHaveBeenCalledOnce();
+  });
+
+  it('shows the passport photo top-right and refreshes its link before printing', async () => {
+    const photoForm = { ...form, photoDocumentId: '00000000-0000-0000-0000-000000000099' };
+    vi.mocked(apiFetch).mockImplementation((path: string) =>
+      path.includes('/documents/')
+        ? Promise.resolve({
+            data: {
+              url: 'https://example.invalid/photo.jpg',
+              expiresAt: '2026-11-08T00:00:00.000Z',
+            },
+          })
+        : Promise.resolve({ data: photoForm }),
+    );
+
+    render(<RegistrationPrintClient applicantId="applicant-id" />);
+
+    const photo = await screen.findByAltText('Applicant passport photo');
+    expect(photo).toHaveAttribute('src', 'https://example.invalid/photo.jpg');
+    expect(photo).toHaveClass('registration-print-photo');
+
+    // Print stays disabled until the photo has settled, like logo and QR.
+    expect(screen.getByRole('button', { name: 'Preparing form…' })).toBeDisabled();
+    fireEvent.load(screen.getByAltText('Saylani'));
+    fireEvent.load(screen.getByAltText('QR code for secure registration verification'));
+    fireEvent.load(photo);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Print Registration Form' })).toBeEnabled();
+    });
+
+    const print = vi.fn();
+    Object.defineProperty(window, 'print', { configurable: true, value: print });
+    fireEvent.click(screen.getByRole('button', { name: 'Print Registration Form' }));
+    // Print waits for the fresh link (and the 1.5s preload cap at most).
+    await waitFor(() => expect(print).toHaveBeenCalledOnce(), { timeout: 5000 });
+    const photoLinkCalls = vi
+      .mocked(apiFetch)
+      .mock.calls.filter(
+        ([calledPath]) => typeof calledPath === 'string' && calledPath.includes('/documents/'),
+      );
+    // Once on load, once on print.
+    expect(photoLinkCalls.length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -4,7 +4,7 @@ import { GENDER_LABELS, JOB_TYPE_LABELS, SHIFT_LABELS, SKILL_LEVEL_LABELS } from
 import Image from 'next/image';
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import type { ApplicantProfile } from '@/domains/applicant';
+import type { ApplicantProfile, DocumentLink } from '@/domains/applicant';
 import { formatDate } from '@/lib/format/date';
 import { apiFetch } from '@/lib/api/client';
 import { RegistrationTokenQr } from './RegistrationTokenQr';
@@ -68,13 +68,55 @@ export function RegistrationFormPrint({
   const [qrSettled, setQrSettled] = useState(false);
   const [logoSettled, setLogoSettled] = useState(false);
   const notifiedRef = useRef(false);
+  // Passport photo (2026-11-17): the applicant's current PHOTO document
+  // from the already-passed profile, fetched as a fresh signed URL (links
+  // live only 120 seconds). No photo → settled immediately, nothing renders.
+  const photoDocument = profile.documents.find(
+    (doc) => doc.typeCode === 'PHOTO' && doc.status !== 'REJECTED',
+  );
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoSettled, setPhotoSettled] = useState(!photoDocument);
+  const [photoFailed, setPhotoFailed] = useState(false);
+  const photoDocIdRef = useRef<string | null>(null);
+  const photoImgRef = useRef<HTMLImageElement>(null);
+
+  // A cached photo can finish loading before React attaches onLoad.
+  useEffect(() => {
+    if (!photoUrl) return;
+    const img = photoImgRef.current;
+    if (img?.complete && img.naturalWidth > 0) setPhotoSettled(true);
+  }, [photoUrl]);
 
   useEffect(() => {
-    if (labelsSettled && qrSettled && logoSettled && !notifiedRef.current) {
+    if (labelsSettled && qrSettled && logoSettled && photoSettled && !notifiedRef.current) {
       notifiedRef.current = true;
       onReady?.();
     }
-  }, [labelsSettled, qrSettled, logoSettled, onReady]);
+  }, [labelsSettled, qrSettled, logoSettled, photoSettled, onReady]);
+
+  useEffect(() => {
+    const document = profile.documents.find(
+      (doc) => doc.typeCode === 'PHOTO' && doc.status !== 'REJECTED',
+    );
+    if (!document || photoDocIdRef.current === document.id) return;
+    photoDocIdRef.current = document.id;
+    let active = true;
+    setPhotoSettled(false);
+    void apiFetch<DocumentLink>(`/api/v1/applicants/${profile.id}/documents/${document.id}/url`)
+      .then(({ data }) => {
+        if (active) setPhotoUrl(data.url);
+      })
+      .catch(() => {
+        // A failed link must not block the form: print without the photo.
+        if (active) {
+          setPhotoFailed(true);
+          setPhotoSettled(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [profile]);
 
   useEffect(() => {
     let active = true;
@@ -128,13 +170,31 @@ export function RegistrationFormPrint({
               Registration reference: <span className="font-mono">{profile.id}</span>
             </p>
           </div>
-          <div className="grid justify-items-center gap-1">
-            <RegistrationTokenQr
-              value={profile.id}
-              width={180}
-              onReady={() => setQrSettled(true)}
-            />
-            <span className="text-xs">Applicant reference QR</span>
+          <div className="flex items-start gap-3">
+            {photoUrl && !photoFailed && (
+              <Image
+                ref={photoImgRef}
+                src={photoUrl}
+                width={132}
+                height={170}
+                alt="Applicant passport photo"
+                unoptimized
+                className="registration-print-photo"
+                onLoad={() => setPhotoSettled(true)}
+                onError={() => {
+                  setPhotoFailed(true);
+                  setPhotoSettled(true);
+                }}
+              />
+            )}
+            <div className="grid justify-items-center gap-1">
+              <RegistrationTokenQr
+                value={profile.id}
+                width={180}
+                onReady={() => setQrSettled(true)}
+              />
+              <span className="text-xs">Applicant reference QR</span>
+            </div>
           </div>
         </header>
 
